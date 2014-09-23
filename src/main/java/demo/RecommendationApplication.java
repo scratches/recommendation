@@ -2,14 +2,15 @@ package demo;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
+import org.springframework.cloud.netflix.hystrix.EnableHystrix;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.ParameterizedTypeReference;
@@ -27,6 +28,7 @@ import reactor.rx.Stream;
 import reactor.rx.spec.Streams;
 
 import com.netflix.discovery.DiscoveryClient;
+import com.netflix.hystrix.contrib.javanica.annotation.HystrixCommand;
 
 import demo.StoreDetails.Recommendation;
 
@@ -34,6 +36,7 @@ import demo.StoreDetails.Recommendation;
 @ComponentScan
 @EnableAutoConfiguration
 @EnableEurekaClient
+@EnableHystrix
 @RestController
 public class RecommendationApplication {
 
@@ -53,11 +56,13 @@ public class RecommendationApplication {
 	private Stream<StoreDetails> fetch(String customerId) {
 		Stream<StoreDetails> details = stores.nearbyStores(customerId).flatMap(
 				store -> {
+					StoreDetails result = new StoreDetails(store);
 					Stream<Recommendation> recommendations = stores
-							.recommendationsForStore(store.getId());
+							.recommendationsForStore(store);
 					return recommendations.map(recommendation -> {
-						StoreDetails result = new StoreDetails(store);
-						result.getRecommendations().add(recommendation);
+						if (recommendation != null) {
+							result.getRecommendations().add(recommendation);
+						}
 						return result;
 					});
 				});
@@ -66,7 +71,7 @@ public class RecommendationApplication {
 
 	private static <T> DeferredResult<List<T>> toDeferredResult(Stream<T> publisher) {
 		DeferredResult<List<T>> deferred = new DeferredResult<List<T>>();
-		publisher.buffer().consume(result -> deferred.setResult(result));
+		publisher.buffer().consume((List<T> result) -> deferred.setResult(result));
 		return deferred;
 	}
 
@@ -84,12 +89,23 @@ class StoreService {
 		this.client = client;
 	}
 
-	public Stream<Recommendation> recommendationsForStore(String storeId) {
-		return Streams.defer(environment, recommendations(storeId));
+	@HystrixCommand(fallbackMethod = "emptyStream")
+	public Stream<Recommendation> recommendationsForStore(Store store) {
+		return Streams.defer(environment, recommendations(store));
 	}
 
+	@HystrixCommand(fallbackMethod = "emptyStream")
 	public Stream<Store> nearbyStores(String customerId) {
+		// TODO: iterate over pages
 		return Streams.defer(environment, stores(customerId));
+	}
+
+	protected <T> Stream<T> emptyStream(String id) {
+		return Streams.defer(environment, Collections.<T>singleton(null));
+	}
+
+	protected <T> Stream<T> emptyStream(Store input) {
+		return Streams.defer(environment, Collections.<T>singleton(null));
 	}
 
 	private Collection<Store> stores(String customerId) {
@@ -108,8 +124,8 @@ class StoreService {
 		return stores;
 	}
 
-	private List<Recommendation> recommendations(String store) {
-		return Arrays.asList(new Recommendation(store));
+	private Collection<Recommendation> recommendations(Store store) {
+		throw new UnsupportedOperationException("No recommendations available");
 	}
 
 }
