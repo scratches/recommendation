@@ -5,11 +5,11 @@ import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -27,19 +27,16 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
 
 import reactor.core.Reactor;
-import rx.Observable;
-import rx.Subscriber;
+import reactor.rx.Stream;
+import reactor.rx.spec.Streams;
 
 import com.netflix.discovery.DiscoveryClient;
 
 import demo.StoreDetails.Recommendation;
-import demo.lifecycle.EnableLifecycle;
-import demo.lifecycle.Start;
 
 @Configuration
 @ComponentScan
 @EnableAutoConfiguration
-@EnableLifecycle
 @EnableEurekaClient
 @RestController
 public class RecommendationApplication {
@@ -56,52 +53,49 @@ public class RecommendationApplication {
 		return toDeferredResult(fetch(customerId));
 	}
 
-	@Start
-	public void run() throws Exception {
-	}
-
 	public static void main(String[] args) {
 		SpringApplication.run(RecommendationApplication.class, args);
 	}
 
-	private Observable<StoreDetails> fetch(String customerId) {
-		Observable<StoreDetails> details = stores.nearbyStores(customerId)
-				.<StoreDetails> flatMap(
+	private Publisher<StoreDetails> fetch(String customerId) {
+		Publisher<StoreDetails> details = stores.nearbyStores(customerId)
+				.flatMap(
 						store -> {
-							Observable<Recommendation> recommendations = stores
+							Stream<Recommendation> recommendations = stores
 									.recommendationsForStore(store.getId());
-							return recommendations.buffer(500, TimeUnit.MILLISECONDS, 10)
-									.first().map(list -> {
+							return recommendations.map(recommendation -> {
 										StoreDetails result = new StoreDetails(store);
-										result.getRecommendations().addAll(list);
+										result.getRecommendations().add(recommendation);
 										return result;
 									});
 						});
 		return details;
 	}
 
-	public static <T> DeferredResult<List<T>> toDeferredResult(Observable<T> observable) {
+	private static <T> DeferredResult<List<T>> toDeferredResult(Publisher<T> publisher) {
 		DeferredResult<List<T>> deferred = new DeferredResult<List<T>>();
 		List<T> list = new ArrayList<T>();
-		observable.subscribe(result -> list.add(result), e -> deferred.setErrorResult(e),
-				() -> deferred.setResult(list));
+		publisher.subscribe(new Subscriber<T>() {
+
+			@Override
+			public void onSubscribe(Subscription s) {
+				s.request(Integer.MAX_VALUE);
+			}
+
+			@Override
+			public void onNext(T t) {
+				list.add(t);
+			}
+
+			@Override
+			public void onError(Throwable t) {
+			}
+
+			@Override
+			public void onComplete() {
+				deferred.setResult(list);
+			}});
 		return deferred;
-	}
-
-	public static <S extends Future<C>, C extends Collection<T>, T> Observable<T> collectionToObservable(
-			S collection) {
-		return Observable.create((Subscriber<? super T> observer) -> {
-			try {
-				for (T item : collection.get()) {
-					observer.onNext(item);
-				}
-				observer.onCompleted();
-			}
-			catch (Exception e) {
-				observer.onError(e);
-			}
-		});
-
 	}
 
 }
@@ -109,65 +103,19 @@ public class RecommendationApplication {
 @Component
 class StoreService {
 
-	private LameService lame;
-
-	@Autowired
-	public StoreService(LameService lame) {
-		this.lame = lame;
-	}
-
-	public Observable<Recommendation> recommendationsForStore(String storeId) {
-		// TODO: iterate over pageable results from rest template
-		return Observable.create((Subscriber<? super Recommendation> observer) -> {
-			lame.recommendationsForStore(storeId).subscribe((list) -> {
-				for (Recommendation recommendation : list) {
-					observer.onNext(recommendation);
-				}
-			}, (e) -> {
-				observer.onError(e);
-			}, () -> {
-				observer.onCompleted();
-			});
-		});
-	}
-
-	public Observable<Store> nearbyStores(String customerId) {
-		// TODO: iterate over pageable results from rest template
-		return Observable.create((Subscriber<? super Store> observer) -> {
-			lame.nearbyStores(customerId).subscribe((list) -> {
-				for (Store recommendation : list) {
-					observer.onNext(recommendation);
-				}
-			}, (e) -> {
-				observer.onError(e);
-			}, () -> {
-				observer.onCompleted();
-			});
-		});
-	}
-
-}
-
-@Component
-class LameService {
-
 	private final DiscoveryClient client;
 
 	@Autowired
-	public LameService(DiscoveryClient client) {
+	public StoreService(DiscoveryClient client) {
 		this.client = client;
 	}
 
-	public Observable<Collection<Recommendation>> recommendationsForStore(String storeId) {
-		return Observable.just(recommendations(storeId));
+	public Stream<Recommendation> recommendationsForStore(String storeId) {
+		return Streams.defer(recommendations(storeId));
 	}
 
-	public Observable<Collection<Store>> nearbyStores(String customerId) {
-		return Observable.just(stores(customerId));
-	}
-
-	protected <T> Collection<T> emptyStream(String id) {
-		return Collections.emptyList();
+	public Stream<Store> nearbyStores(String customerId) {
+		return Streams.defer(stores(customerId));
 	}
 
 	private Collection<Store> stores(String customerId) {
