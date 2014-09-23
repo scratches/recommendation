@@ -14,7 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
-import org.springframework.cloud.netflix.hystrix.EnableHystrix;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.ParameterizedTypeReference;
@@ -32,8 +31,6 @@ import rx.Observable;
 import rx.Subscriber;
 
 import com.netflix.discovery.DiscoveryClient;
-import com.netflix.hystrix.contrib.javanica.annotation.HystrixCommand;
-import com.netflix.hystrix.contrib.javanica.command.ObservableResult;
 
 import demo.StoreDetails.Recommendation;
 import demo.lifecycle.EnableLifecycle;
@@ -44,7 +41,6 @@ import demo.lifecycle.Start;
 @EnableAutoConfiguration
 @EnableLifecycle
 @EnableEurekaClient
-@EnableHystrix
 @RestController
 public class RecommendationApplication {
 
@@ -162,24 +158,12 @@ class LameService {
 		this.client = client;
 	}
 
-	@HystrixCommand(fallbackMethod = "emptyStream")
 	public Observable<Collection<Recommendation>> recommendationsForStore(String storeId) {
-		return new ObservableResult<Collection<Recommendation>>() {
-			@Override
-			public Collection<Recommendation> invoke() {
-				return recommendations(storeId);
-			}
-		};
+		return Observable.just(recommendations(storeId));
 	}
 
-	@HystrixCommand(fallbackMethod = "emptyStream")
 	public Observable<Collection<Store>> nearbyStores(String customerId) {
-		return new ObservableResult<Collection<Store>>() {
-			@Override
-			public Collection<Store> invoke() {
-				return stores(customerId);
-			}
-		};
+		return Observable.just(stores(customerId));
 	}
 
 	protected <T> Collection<T> emptyStream(String id) {
