@@ -5,6 +5,7 @@ import java.net.URISyntaxException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
@@ -23,9 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
 
-import reactor.core.Environment;
 import reactor.rx.Stream;
-import reactor.rx.spec.Streams;
+import reactor.rx.Streams;
 
 import com.netflix.discovery.DiscoveryClient;
 import com.netflix.hystrix.contrib.javanica.annotation.HystrixCommand;
@@ -54,24 +54,20 @@ public class RecommendationApplication {
 	}
 
 	private Stream<StoreDetails> fetch(String customerId) {
-		Stream<StoreDetails> details = stores.nearbyStores(customerId).flatMap(
-				store -> {
-					StoreDetails result = new StoreDetails(store);
-					Stream<Recommendation> recommendations = stores
-							.recommendationsForStore(store);
-					return recommendations.map(recommendation -> {
-						if (recommendation != null) {
-							result.getRecommendations().add(recommendation);
-						}
-						return result;
-					});
-				});
+		Stream<StoreDetails> details = stores.nearbyStores(customerId).flatMap(store -> {
+			StoreDetails result = new StoreDetails(store);
+			return stores.recommendationsForStore(store).map(recommendation -> {
+				result.getRecommendations().add(recommendation);
+				return result;
+			}).defaultIfEmpty(result);
+		});
 		return details;
 	}
 
 	private static <T> DeferredResult<List<T>> toDeferredResult(Stream<T> publisher) {
 		DeferredResult<List<T>> deferred = new DeferredResult<List<T>>();
-		publisher.buffer().consume((List<T> result) -> deferred.setResult(result));
+		publisher.log("Result").buffer()
+				.consume((List<T> result) -> deferred.setResult(result));
 		return deferred;
 	}
 
@@ -81,34 +77,35 @@ public class RecommendationApplication {
 class StoreService {
 
 	private final DiscoveryClient client;
-	private Environment environment;
 
 	@Autowired
-	public StoreService(Environment environment, DiscoveryClient client) {
-		this.environment = environment;
+	public StoreService(DiscoveryClient client) {
 		this.client = client;
 	}
 
 	@HystrixCommand(fallbackMethod = "emptyStream")
 	public Stream<Recommendation> recommendationsForStore(Store store) {
-		return Streams.defer(environment, recommendations(store));
+		// Get at most 10 (or timeout)
+		return Streams.defer(recommendations(store)).log("Recommendations");
 	}
 
 	@HystrixCommand(fallbackMethod = "emptyStream")
 	public Stream<Store> nearbyStores(String customerId) {
-		// TODO: iterate over pages
-		return Streams.defer(environment, stores(customerId));
+		// TODO: global timeout after 1 sec
+		return Streams.range(0, 10)
+				.flatMap(pageNumber -> Streams.defer(stores(customerId, pageNumber)))
+				.log("Stores");
 	}
 
 	protected <T> Stream<T> emptyStream(String id) {
-		return Streams.defer(environment, Collections.<T>singleton(null));
+		return Streams.empty();
 	}
 
 	protected <T> Stream<T> emptyStream(Store input) {
-		return Streams.defer(environment, Collections.<T>singleton(null));
+		return Streams.empty();
 	}
 
-	private Collection<Store> stores(String customerId) {
+	private Collection<Store> stores(String customerId, long pageNumber) {
 		String url = client.getNextServerFromEureka("CUSTOMERS", false).getHomePageUrl();
 		URI base;
 		try {
@@ -119,6 +116,7 @@ class StoreService {
 		}
 		final Collection<Store> stores = new Traverson(base, MediaTypes.HAL_JSON)
 				.follow("stores-nearby")
+				.withTemplateParameters(Collections.singletonMap("page", pageNumber))
 				.toObject(new ParameterizedTypeReference<Resources<Store>>() {
 				}).getContent();
 		return stores;
