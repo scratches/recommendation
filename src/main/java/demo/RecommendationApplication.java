@@ -6,6 +6,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.annotation.PostConstruct;
+
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
@@ -24,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
 
+import reactor.core.Environment;
 import reactor.rx.Stream;
 import reactor.rx.Streams;
 
@@ -42,6 +49,11 @@ public class RecommendationApplication {
 
 	@Autowired
 	private StoreService stores;
+
+	@PostConstruct
+	public void init() {
+		Environment.initializeIfEmpty();
+	}
 
 	@RequestMapping("/{customerId}")
 	public DeferredResult<List<StoreDetails>> recommend(@PathVariable String customerId)
@@ -65,13 +77,21 @@ public class RecommendationApplication {
 	}
 
 	private Stream<Store> nearbyStores(String customerId) {
+		// Don't load empty pages
+		final AtomicInteger length = new AtomicInteger(1);
+		// Global timeout after 1 sec
+		final AtomicBoolean cancelled = new AtomicBoolean(false);
+		Environment.timer().submit(time -> cancelled.set(true));
 		// @formatter:off	
 		return Streams
 				.range(0, 9) // at most 10 pages
-				// TODO: Don't load empty pages
-				// TODO: global timeout after 1 sec
+				.takeUntil(stream -> cancelled.get() || length.get()==0)
 				.flatMap(
-						pageNumber -> Streams.defer(stores.stores(customerId, pageNumber)))
+					pageNumber -> {
+						Collection<Store> list = stores.stores(customerId, pageNumber);
+						length.set(list.size());
+						return Streams.defer(list);
+					})
 				.log("Stores");
 // @formatter:on
 	}
@@ -91,6 +111,7 @@ public class RecommendationApplication {
 }
 
 @Component
+@Slf4j
 class StoreService {
 
 	private final DiscoveryClient client;
@@ -130,6 +151,7 @@ class StoreService {
 	}
 
 	protected Collection<Store> emptyStores(String id, long pageNumber) {
+		log.info("Empty stores: " + pageNumber);
 		return pageNumber == 0 ? defaultStores : Collections.emptyList();
 	}
 
