@@ -85,20 +85,19 @@ public class RecommendationApplication {
 		// @formatter:off	
 		return Streams
 				.range(0, 9) // at most 10 pages
-				.takeUntil(stream -> cancelled.get() || length.get()==0)
+				.takeWhile(stream -> cancelled.get() && length.get()>0)
 				.flatMap(
 					pageNumber -> {
 						Collection<Store> list = stores.stores(customerId, pageNumber);
 						length.set(list.size());
-						return Streams.defer(list);
-					})
-				.log("Stores");
+						return Streams.from(list);
+					}).log("Stores");
 // @formatter:on
 	}
 
 	private Stream<Recommendation> recommendationsForStore(Store store) {
 		// TODO: Get at most 10 (or timeout)
-		return Streams.defer(stores.recommendations(store)).log("Recommendations");
+		return Streams.from(stores.recommendations(store)).log("Recommendations");
 	}
 
 	private static <T> DeferredResult<List<T>> toDeferredResult(Stream<T> publisher) {
