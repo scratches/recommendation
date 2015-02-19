@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
 
-import reactor.core.Environment;
+import reactor.Environment;
 import reactor.rx.Stream;
 import reactor.rx.Streams;
 
@@ -96,7 +96,6 @@ public class RecommendationApplication {
 	}
 
 	private Stream<Recommendation> recommendationsForStore(Store store) {
-		// TODO: Get at most 10 (or timeout)
 		return Streams.from(stores.recommendations(store)).log("Recommendations");
 	}
 
